@@ -41,7 +41,7 @@ impl Future for Handler {
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
-        log::debug!("Handler::poll is called");
+        log::debug!("Handler::poll is called for cfd={}", self.cfd);
 
         if !self.registred.get() {
             log::debug!(
