@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sfd = run_server(4243);
     let cfd = handle_connection(sfd);
 
-    let ex = Executor::new();
+    let mut ex = Executor::new();
     let reactor = ex.reactor();
 
     ex.block_on(async {

@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::mem;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 pub struct Reactor {
     fds: Mutex<HashMap<i32, std::task::Waker>>,
-    // h: Cell<Option<JoinHandle<()>>>,
+    shutdown: AtomicBool,
 }
 
 unsafe impl Sync for Reactor {}
@@ -13,6 +15,7 @@ impl Reactor {
     pub fn new() -> Self {
         Self {
             fds: Mutex::new(HashMap::new()),
+            shutdown: AtomicBool::new(false),
         }
     }
 
@@ -20,7 +23,21 @@ impl Reactor {
         self.fds.lock().unwrap().insert(fd, waker.clone());
     }
 
+    pub fn set_shutdown(&self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+    }
+
+    pub fn is_shutdown(&self) -> bool {
+        self.shutdown.load(Ordering::Relaxed)
+    }
+
     pub fn poll_once(&self) {
+        log::debug!("Next pool_once");
+        if self.is_shutdown() {
+            log::debug!("Reactor was shutdowned.");
+            return;
+        }
+
         let mut readfds: libc::fd_set = unsafe { mem::zeroed() };
         let mut writefds: libc::fd_set = unsafe { mem::zeroed() };
 
@@ -52,17 +69,18 @@ impl Reactor {
             )
         } {
             -1 => {
-                log::error!("Reactor: select with -1");
+                log::error!("Syscall select finished with -1");
             }
             0 => {
-                log::warn!("Reactor: select with timeout");
+                log::warn!("Syscall select finished with timeout");
             }
             count => {
-                log::warn!("Reactor: select with result {count}");
+                log::warn!("Syscall select finished with result {count}");
                 for (fd, waker) in self.fds.lock().unwrap().iter() {
                     if unsafe { libc::FD_ISSET(*fd, &readfds) } {
-                        log::debug!("Reactor: wake {}", *fd);
+                        log::debug!("wake {}", *fd);
                         waker.clone().wake();
+                        // @todo
                         // self.fds.remove(fd);
                     }
                 }
