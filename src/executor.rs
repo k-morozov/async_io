@@ -1,61 +1,55 @@
+pub mod waker;
+
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
-use std::task::{Context, RawWaker, RawWakerVTable};
-use std::task::Waker;
-use std::task::{Poll};
 use std::pin::Pin;
-use std::cell::RefCell;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::mpsc;
+use std::task::Context;
+use std::task::Poll;
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 use crate::reactor::Reactor;
 
-
-
-struct FWrapper {
-    id: i32,
-    events: Arc<RefCell<Vec<i32>>>,
-}
-
-impl FWrapper {
-    pub fn new(id: i32, events: Arc<RefCell<Vec<i32>>>,) -> Self {
-        Self {
-            id,
-            events
-        }
-    }
-}
-
-static VTABLE: RawWakerVTable = RawWakerVTable::new(
-        |ptr: *const()| -> RawWaker {
-            let c = unsafe { Arc::from_raw(ptr as *const FWrapper) };
-            RawWaker::new(Arc::into_raw(c) as *const(), &VTABLE)
-        },
-        |ptr: *const()| {
-            log::debug!("call wake");
-            let c = unsafe { Arc::from_raw(ptr as *const FWrapper) };
-            let mut es = c.events.borrow_mut();
-            es.push(c.id);
-        },
-        |_| {
-
-        },
-        |_| {
-
-        },
-    );
-
 pub struct Executor<F: Future> {
     reactor: Arc<Reactor>,
-    table: HashMap<i32, Pin<Box<F>>>,
-    events: Arc<RefCell<Vec<i32>>>,
+    table: HashMap<waker::TWakerID, Pin<Box<F>>>,
+    events_sender: mpsc::Sender<waker::TWakerID>,
+    events_receiver: mpsc::Receiver<waker::TWakerID>,
+
+    id: Mutex<waker::TWakerID>,
+
+    reactor_handle: Cell<Option<JoinHandle<()>>>,
 }
 
 impl<F: Future> Executor<F> {
     pub fn new() -> Self {
+        let (tx, rx) = mpsc::channel();
+
+        let reactor = Arc::new(Reactor::new());
+        let reactor_to_handle = reactor.clone();
+
+        let reactor_handle = std::thread::spawn(move || {
+            loop {
+                reactor_to_handle.poll_once();
+                if reactor_to_handle.is_shutdown() {
+                    log::debug!("Compliting reactor thread.");
+                    break;
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        });
+
         Self {
-            reactor: Arc::new(Reactor::new()),
+            reactor,
             table: HashMap::new(),
-            events: Arc::new(RefCell::new(vec![])),
+            events_sender: tx,
+            events_receiver: rx,
+            id: Mutex::new(1),
+            reactor_handle: Cell::new(Some(reactor_handle)),
         }
     }
 
@@ -63,56 +57,73 @@ impl<F: Future> Executor<F> {
         self.reactor.clone()
     }
 
-    pub fn block_on(&mut self, future: F) -> F::Output
-    {
-        self.table.insert(1, Box::pin(future));
+    pub fn block_on(&mut self, future: F) -> F::Output {
+        let id = self.generate_id();
 
-        let wrapper = Arc::new(FWrapper::new(1, self.events.clone()));
+        self.table.insert(id, Box::pin(future));
 
-        let raw = RawWaker::new(
-            Arc::into_raw(wrapper) as *const(), 
-            &VTABLE
-        );
-        let waker = unsafe { Waker::from_raw(raw) };
-
+        let waker = waker::make(id, self.events_sender.clone());
         let mut ctx = Context::from_waker(&waker);
 
-        let future = self.table.get_mut(&1).unwrap();
+        let future = self.table.get_mut(&id).unwrap();
         if let Poll::Ready(output) = future.as_mut().poll(&mut ctx) {
-            log::debug!("Executor: future is ready without select call, block_on is completed.");
+            log::debug!("Future is ready without select call, block_on is completed.");
             return output;
         }
 
         loop {
-            log::debug!("Executor: next pool_once");
-            self.reactor.poll_once();
+            match self.events_receiver.try_recv() {
+                Ok(id) => {
+                    log::debug!("Found ready event with id {id}.");
 
-            let es = self.events.borrow();
-            if !es.is_empty() {
-                log::debug!("Executor: there is an event.");
-
-                for id in es.iter() {
-                    let future = self.table.get_mut(id);
+                    let future = self.table.get_mut(&id);
 
                     if let None = future {
-                        log::warn!("Executor: empty future for id={}", *id);
+                        log::warn!("Empty future for id {}", id);
                         continue;
                     }
 
                     match future.unwrap().as_mut().poll(&mut ctx) {
                         Poll::Ready(output) => {
-                            log::debug!("Executor: future is ready, block_on is completed.");
+                            log::debug!("Future is ready, block_on is completed.");
                             return output;
                         }
                         Poll::Pending => {
-                            log::debug!("Executor: future is pending, pool once.");
+                            log::debug!("Future is pending, pool once.");
                         }
                     }
-                }
+                },
+                Err(er) => {
+                    match er {
+                        mpsc::TryRecvError::Empty => {
+                            let timeout = Duration::from_secs(1);
+                            log::debug!("{er}, sleep {} sec", timeout.as_secs());
+                            std::thread::sleep(timeout);
+                        },
+                        mpsc::TryRecvError::Disconnected => {
+                            log::error!("{er}");
+                            panic!("broken channel");
+                        },
+                    }
+                    
+                },
             }
-            
-
 
         }
+    }
+
+    fn generate_id(&self) -> waker::TWakerID {
+        let g = self.id.lock().unwrap();
+        (*g).wrapping_add(1)
+    }
+}
+
+impl<F: Future> Drop for Executor<F> {
+    fn drop(&mut self) {
+        self.reactor.set_shutdown();
+        let h = self.reactor_handle
+            .replace(None)
+            .expect("created in new");
+        h.join().unwrap();
     }
 }
