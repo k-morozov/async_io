@@ -3,6 +3,7 @@ use std::mem;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 pub struct Reactor {
     fds: Mutex<HashMap<i32, std::task::Waker>>,
@@ -27,11 +28,22 @@ impl Reactor {
         self.shutdown.store(true, Ordering::Relaxed);
     }
 
-    pub fn is_shutdown(&self) -> bool {
+    pub fn run_loop(&self) {
+        loop {
+            self.poll_once();
+            if self.is_shutdown() {
+                log::debug!("Compliting reactor thread.");
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    }
+
+    fn is_shutdown(&self) -> bool {
         self.shutdown.load(Ordering::Relaxed)
     }
 
-    pub fn poll_once(&self) {
+    fn poll_once(&self) {
         log::debug!("Next pool_once");
         if self.is_shutdown() {
             log::debug!("Reactor was shutdowned.");
@@ -75,7 +87,7 @@ impl Reactor {
                 log::warn!("Syscall select finished with timeout");
             }
             count => {
-                log::warn!("Syscall select finished with result {count}");
+                log::info!("Syscall select finished with result {count}");
                 for (fd, waker) in self.fds.lock().unwrap().iter() {
                     if unsafe { libc::FD_ISSET(*fd, &readfds) } {
                         log::debug!("wake {}", *fd);
