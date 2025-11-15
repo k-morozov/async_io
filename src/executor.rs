@@ -1,4 +1,6 @@
-pub mod waker;
+mod event;
+mod scheduler;
+mod waker;
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -11,7 +13,6 @@ use std::task::Context;
 use std::task::Poll;
 use std::task::Waker;
 use std::thread::JoinHandle;
-use std::time::Duration;
 
 use crate::reactor::Reactor;
 
@@ -92,7 +93,7 @@ where
             log::debug!("loop for block_on");
             match rx.try_recv() {
                 Ok(task_id) => {
-                    log::debug!("Found ready event with task_id {task_id}.");
+                    log::debug!("Found ready task woth id {task_id}.");
 
                     let mut g_table = self.table.lock().unwrap();
                     let g_future = g_table.get_mut(&task_id).unwrap().get_mut().unwrap();
@@ -137,6 +138,7 @@ where
         }
     }
 
+    // trait?
     fn generate_id(&self) -> waker::TWakerID {
         let g = self.id.lock().unwrap();
         (*g).wrapping_add(1)
@@ -146,6 +148,7 @@ where
 impl<F: Future + Send + 'static> Drop for Executor<F> {
     fn drop(&mut self) {
         log::debug!("call drop");
+
         self.reactor.set_shutdown();
         let h = self.reactor_handle.replace(None).expect("created in new");
         h.join().unwrap();

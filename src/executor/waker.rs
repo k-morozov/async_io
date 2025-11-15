@@ -15,7 +15,11 @@ pub struct WakerImpl {
 
 impl WakerImpl {
     pub fn new(id: TWakerID, events: TEvents, thread_id: Thread) -> Self {
-        Self { id, events, thread_id }
+        Self {
+            id,
+            events,
+            thread_id,
+        }
     }
 }
 

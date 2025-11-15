@@ -31,13 +31,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ex.run_events_loop();
 
     ex.block_on(async move {
-        let task = Task::new(reactor, cfd);
-        task.await;
+        Task::new(reactor, cfd).await;
     });
 
     // let h1 = ex.spawn(async { task1().await });
     // let h2 = ex.spawn(async { task2().await });
-    
+
     // ex.block_on(async {
     //     let r1 = h1.await;
     //     let r2 = h2.await;

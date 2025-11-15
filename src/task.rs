@@ -23,20 +23,6 @@ impl Task {
         }
     }
 
-    // pub fn register(&self) {
-    //     if !self.registred.get() {
-    //         log::debug!(
-    //             "Task was not registred, add cfd {} to reactor",
-    //             self.cfd
-    //         );
-
-    //         self.reactor.add_reader(self.cfd, cx.waker().clone());
-    //         self.registred.set(true);
-
-    //         log::debug!("Task was registred and is being pending");
-    //     }
-    // }
-
     pub fn reset(&self) {
         let mut readfds = self.readfds.borrow_mut();
 
