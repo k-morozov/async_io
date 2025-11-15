@@ -58,10 +58,7 @@ impl Future for Task {
         log::debug!("Task is called for cfd={}", self.cfd);
 
         if !self.registred.get() {
-            log::debug!(
-                "Task was not registred, add cfd {} to reactor",
-                self.cfd
-            );
+            log::debug!("Task was not registred, add cfd {} to reactor", self.cfd);
 
             self.reactor.add_reader(self.cfd, cx.waker().clone());
             self.registred.set(true);
