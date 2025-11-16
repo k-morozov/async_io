@@ -11,22 +11,19 @@ use std::thread::JoinHandle;
 
 use crate::reactor::Reactor;
 
+use self::event_handler::EventHandler;
 use self::scheduler::Scheduler;
 
-pub struct Executor<F: Future + Send + 'static> {
+pub struct Executor<T: Send + 'static> {
     reactor: Arc<Reactor>,
     reactor_handle: Cell<Option<JoinHandle<()>>>,
 
     id: Mutex<waker::TWakerID>,
 
-    scheduler: Arc<Scheduler<F>>,
+    scheduler: Arc<Scheduler<T>>,
 }
 
-impl<F> Executor<F>
-where
-    F: Future + Send + 'static,
-    F::Output: Send,
-{
+impl<T: Send + 'static> Executor<T> {
     pub fn new() -> Self {
         let reactor = Arc::new(Reactor::new());
         let reactor_to_handle = reactor.clone();
@@ -54,7 +51,16 @@ where
         self.reactor.clone()
     }
 
-    pub fn block_on(&mut self, future: F) -> F::Output {
+    pub fn block_on<F: Future<Output = T> + Send + 'static>(&mut self, future: F) -> F::Output {
+        let handler = self.spawn(future);
+
+        handler.wait_result()
+    }
+
+    pub fn spawn<F: Future<Output = T> + Send + 'static>(
+        &mut self,
+        future: F,
+    ) -> Arc<EventHandler<T>> {
         let task_id = self.generate_id();
 
         let scheduler = self.scheduler.clone();
@@ -67,9 +73,24 @@ where
         let ev = event::Event::new(task_id, future, waker);
 
         let handler = self.scheduler.push_event(ev);
-
-        handler.wait_result()
+        handler
     }
+
+    // pub fn spawn_inner(&mut self, future: F) -> Arc<EventHandler<F::Output>> {
+    //     let task_id = self.generate_id();
+
+    //     let scheduler = self.scheduler.clone();
+    //     let resume = move |id: waker::TWakerID| {
+    //         log::debug!("call resume for waker with id={id}");
+    //         scheduler.resume_event(id);
+    //     };
+
+    //     let waker = waker::make(task_id, Box::new(resume));
+    //     let ev = event::Event::new(task_id, future, waker);
+
+    //     let handler = self.scheduler.push_event(ev);
+    //     handler
+    // }
 
     // trait?
     fn generate_id(&self) -> waker::TWakerID {
@@ -78,12 +99,14 @@ where
     }
 }
 
-impl<F: Future + Send + 'static> Drop for Executor<F> {
+impl<T: Send + 'static> Drop for Executor<T> {
     fn drop(&mut self) {
         log::debug!("call drop");
 
         self.reactor.set_shutdown();
         let h = self.reactor_handle.replace(None).expect("created in new");
         h.join().unwrap();
+
+        self.scheduler.deactivate();
     }
 }

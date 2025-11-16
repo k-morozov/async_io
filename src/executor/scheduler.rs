@@ -1,6 +1,5 @@
 use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
-use std::hash::Hash;
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
@@ -9,21 +8,13 @@ use crate::executor::event;
 
 use super::event_handler::EventHandler;
 use super::waker;
-// use super::ev
 
-pub(crate) struct Scheduler<F>
-where
-    F: Future + Send + 'static,
-{
-    inner: Arc<SchedulerImpl<F>>,
+pub(crate) struct Scheduler<T: Send + 'static> {
+    inner: Arc<SchedulerImpl<T>>,
     events_handle: Cell<Option<JoinHandle<()>>>,
 }
 
-impl<F> Scheduler<F>
-where
-    F: Future + Send + 'static,
-    F::Output: Send,
-{
+impl<T: Send + 'static> Scheduler<T> {
     pub(crate) fn new() -> Self {
         Self {
             inner: SchedulerImpl::new(),
@@ -47,7 +38,7 @@ where
         self.inner.deactivate();
     }
 
-    pub(crate) fn push_event(&self, event: event::Event<F>) -> Arc<EventHandler<F::Output>> {
+    pub(crate) fn push_event(&self, event: event::Event<T>) -> Arc<EventHandler<T>> {
         self.inner.push_event(event)
     }
 
@@ -56,31 +47,36 @@ where
     }
 }
 
-impl<F: Future + Send + 'static> Drop for Scheduler<F> {
+impl<T: Send + 'static> Drop for Scheduler<T> {
     fn drop(&mut self) {
         log::debug!("call drop");
 
-        let h = self.events_handle.take().unwrap();
-        h.join().unwrap();
+        self.deactivate();
+
+        match self.events_handle.take() {
+            Some(handle) => {
+                if let Err(er) = handle.join() {
+                    log::error!("Join events_handle finished with error: {:?}", er);
+                    panic!("failed join for events_handle");
+                }
+            }
+            None => {
+                panic!("Drop failed: None in events_handle");
+            }
+        }
     }
 }
 
-struct SchedulerImpl<F>
-where
-    F: Future + Send + 'static,
-{
-    in_progress: Arc<(Mutex<VecDeque<event::Event<F>>>, Condvar)>,
-    suspend_events: Mutex<HashMap<waker::TWakerID, event::Event<F>>>,
-    handlers: Mutex<HashMap<waker::TWakerID, Arc<EventHandler<F::Output>>>>,
+struct SchedulerImpl<T> {
+    in_progress: Arc<(Mutex<VecDeque<event::Event<T>>>, Condvar)>,
+    suspend_events: Mutex<HashMap<waker::TWakerID, event::Event<T>>>,
+    handlers: Mutex<HashMap<waker::TWakerID, Arc<EventHandler<T>>>>,
     shutdown: Mutex<bool>,
 }
 
-unsafe impl<F> Sync for SchedulerImpl<F> where F: Future + Send + 'static {}
+unsafe impl<T> Sync for SchedulerImpl<T> {}
 
-impl<F> SchedulerImpl<F>
-where
-    F: Future + Send + 'static,
-{
+impl<T> SchedulerImpl<T> {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             in_progress: Arc::new((Mutex::new(VecDeque::new()), Condvar::new())),
@@ -93,6 +89,8 @@ where
     fn deactivate(&self) {
         let mut g = self.shutdown.lock().unwrap();
         (*g) = true;
+
+        // notify
     }
 
     fn is_shutdown(&self) -> bool {
@@ -117,7 +115,6 @@ where
             match event {
                 Some(mut event) => match event.run() {
                     event::EventStatus::READY(output) => {
-
                         event.send_to_tx(output);
                         log::debug!("Data was sent to event.");
                         return;
@@ -135,7 +132,7 @@ where
         }
     }
 
-    fn push_event(&self, mut event: event::Event<F>) -> Arc<EventHandler<F::Output>> {
+    fn push_event(&self, mut event: event::Event<T>) -> Arc<EventHandler<T>> {
         if self.is_shutdown() {
             panic!("failed, thread was shutdowned");
         }
@@ -154,7 +151,7 @@ where
 
         let event_handler = {
             let mut handlers_guard = self.handlers.lock().unwrap();
-            let event_handler: Arc<EventHandler<F::Output>> = EventHandler::<F::Output>::new(rx);
+            let event_handler = EventHandler::<T>::new(rx);
             handlers_guard.insert(task_id, event_handler.clone());
             event_handler
         };

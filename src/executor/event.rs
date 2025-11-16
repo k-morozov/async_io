@@ -1,6 +1,5 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::task::Context;
 use std::task::Poll;
@@ -13,18 +12,20 @@ pub enum EventStatus<T> {
     SUSPEND,
 }
 
-pub struct Event<F: Future + Send + 'static> {
+pub struct Event<T> {
     task_id: waker::TWakerID,
-    future: Pin<Box<F>>,
+    future: Pin<Box<dyn Future<Output = T>>>,
     waker: Waker,
-    tx: Option<Sender<F::Output>>,
+    tx: Option<Sender<T>>,
 }
 
-impl<F: Future + Send + 'static> Event<F>
-where
-    F: Future + Send + 'static,
-{
-    pub fn new(task_id: waker::TWakerID, future: F, waker: Waker) -> Self {
+unsafe impl<T> Send for Event<T> {}
+
+impl<T> Event<T> {
+    pub fn new<F>(task_id: waker::TWakerID, future: F, waker: Waker) -> Self
+    where
+        F: Future<Output = T> + Send + 'static,
+    {
         Self {
             task_id,
             future: Box::pin(future),
@@ -37,21 +38,26 @@ where
         self.task_id
     }
 
-    pub fn set_tx(&mut self, tx: Sender<F::Output>) {
+    pub fn set_tx(&mut self, tx: Sender<T>) {
         self.tx = Some(tx);
     }
 
-    pub fn send_to_tx(&self, data: F::Output) {
+    pub fn send_to_tx(&self, data: T) {
         match &self.tx {
             Some(tx) => {
                 log::debug!("send the data");
-                tx.send(data);
-            },
-            None => todo!(),
+                if let Err(er) = tx.send(data) {
+                    log::debug!("Failed send result from event: {}", er);
+                    panic!("Failed send data");
+                }
+            }
+            None => {
+                panic!("tx wasn't seted");
+            }
         }
     }
 
-    pub fn run(&mut self) -> EventStatus<F::Output> {
+    pub fn run(&mut self) -> EventStatus<T> {
         let mut ctx = Context::from_waker(&self.waker);
 
         match self.future.as_mut().poll(&mut ctx) {
