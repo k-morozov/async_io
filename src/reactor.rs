@@ -90,7 +90,7 @@ impl Reactor {
                 log::info!("Syscall select finished with result {count}");
                 for (fd, waker) in self.fds.lock().unwrap().iter() {
                     if unsafe { libc::FD_ISSET(*fd, &readfds) } {
-                        log::debug!("wake {}", *fd);
+                        log::debug!("call wake for fd={}", *fd);
                         waker.clone().wake();
                         // @todo
                         // self.fds.remove(fd);

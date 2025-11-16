@@ -28,7 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut ex = Executor::new();
     let reactor = ex.reactor();
 
-    // ex.run_events_loop();
+    ex.start();
 
     ex.block_on(async move {
         Task::new(reactor, cfd).await;

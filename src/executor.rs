@@ -1,29 +1,25 @@
 mod event;
+mod event_handler;
 mod scheduler;
 mod waker;
 
 use std::cell::Cell;
-use std::collections::HashMap;
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::mpsc::{self, channel};
-use std::task::Context;
-use std::task::Poll;
-use std::task::Waker;
 use std::thread::JoinHandle;
 
 use crate::reactor::Reactor;
 
+use self::scheduler::Scheduler;
+
 pub struct Executor<F: Future + Send + 'static> {
     reactor: Arc<Reactor>,
-    table: Arc<Mutex<HashMap<waker::TWakerID, Mutex<Pin<Box<F>>>>>>,
-    task_id_to_waker: Arc<Mutex<HashMap<waker::TWakerID, Waker>>>,
+    reactor_handle: Cell<Option<JoinHandle<()>>>,
 
     id: Mutex<waker::TWakerID>,
 
-    reactor_handle: Cell<Option<JoinHandle<()>>>,
+    scheduler: Arc<Scheduler<F>>,
 }
 
 impl<F> Executor<F>
@@ -36,7 +32,7 @@ where
         let reactor_to_handle = reactor.clone();
 
         let reactor_handle = std::thread::Builder::new()
-            .name("reactor_thread".to_string())
+            .name("reactor".to_string())
             .spawn(move || {
                 reactor_to_handle.run_loop();
             })
@@ -44,11 +40,14 @@ where
 
         Self {
             reactor,
-            table: Arc::new(Mutex::new(HashMap::new())),
-            task_id_to_waker: Arc::new(Mutex::new(HashMap::new())),
-            id: Mutex::new(1),
             reactor_handle: Cell::new(Some(reactor_handle)),
+            id: Mutex::new(1),
+            scheduler: Arc::new(Scheduler::new()),
         }
+    }
+
+    pub fn start(&self) {
+        self.scheduler.activate();
     }
 
     pub fn reactor(&self) -> Arc<Reactor> {
@@ -58,84 +57,18 @@ where
     pub fn block_on(&mut self, future: F) -> F::Output {
         let task_id = self.generate_id();
 
-        let (tx, rx) = channel();
+        let scheduler = self.scheduler.clone();
+        let resume = move |id: waker::TWakerID| {
+            log::debug!("call resume for waker with id={id}");
+            scheduler.resume_event(id);
+        };
 
-        self.table
-            .lock()
-            .unwrap()
-            .insert(task_id, Mutex::new(Box::pin(future)));
+        let waker = waker::make(task_id, Box::new(resume));
+        let ev = event::Event::new(task_id, future, waker);
 
-        self.task_id_to_waker
-            .lock()
-            .unwrap()
-            .insert(task_id, waker::make(task_id, tx, std::thread::current()));
+        let handler = self.scheduler.push_event(ev);
 
-        let wk = self
-            .task_id_to_waker
-            .lock()
-            .unwrap()
-            .get(&task_id)
-            .unwrap()
-            .clone();
-
-        let mut ctx = Context::from_waker(&wk);
-
-        {
-            let mut g_table = self.table.lock().unwrap();
-            let g_future = g_table.get_mut(&task_id).unwrap().get_mut().unwrap();
-            if let Poll::Ready(output) = g_future.as_mut().poll(&mut ctx) {
-                log::debug!("Future is ready without select call, block_on is completed.");
-                return output;
-            }
-        }
-
-        loop {
-            log::debug!("loop for block_on");
-            match rx.try_recv() {
-                Ok(task_id) => {
-                    log::debug!("Found ready task woth id {task_id}.");
-
-                    let mut g_table = self.table.lock().unwrap();
-                    let g_future = g_table.get_mut(&task_id).unwrap().get_mut().unwrap();
-
-                    let wk = self
-                        .task_id_to_waker
-                        .lock()
-                        .unwrap()
-                        .get(&task_id)
-                        .unwrap()
-                        .clone();
-                    let mut ctx = Context::from_waker(&wk);
-
-                    match g_future.as_mut().poll(&mut ctx) {
-                        Poll::Ready(output) => {
-                            log::debug!("Future is ready, block_on is completed.");
-
-                            g_table.remove(&task_id);
-                            self.task_id_to_waker.lock().unwrap().remove(&task_id);
-
-                            return output;
-                        }
-                        Poll::Pending => {
-                            log::debug!("Future is pending, loop once.");
-                        }
-                    }
-                }
-                Err(er) => match er {
-                    mpsc::TryRecvError::Empty => {
-                        // let timeout = Duration::from_secs(1);
-                        // std::thread::sleep(timeout);
-
-                        log::debug!("Empty channel - park");
-                        std::thread::park();
-                    }
-                    mpsc::TryRecvError::Disconnected => {
-                        log::error!("{er}");
-                        panic!("broken channel");
-                    }
-                },
-            }
-        }
+        handler.wait_result()
     }
 
     // trait?

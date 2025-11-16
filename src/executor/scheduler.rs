@@ -1,9 +1,15 @@
 use std::cell::Cell;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::hash::Hash;
+use std::sync::mpsc::channel;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 
 use crate::executor::event;
+
+use super::event_handler::EventHandler;
+use super::waker;
+// use super::ev
 
 pub(crate) struct Scheduler<F>
 where
@@ -16,18 +22,19 @@ where
 impl<F> Scheduler<F>
 where
     F: Future + Send + 'static,
+    F::Output: Send,
 {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             inner: SchedulerImpl::new(),
             events_handle: Cell::new(None),
         }
     }
 
-    pub fn activate(&self) {
+    pub(crate) fn activate(&self) {
         let inner = self.inner.clone();
         let events_handle: JoinHandle<()> = std::thread::Builder::new()
-            .name("events_proccessor".to_string())
+            .name("scheduler".to_string())
             .spawn(move || {
                 inner.loop_proccess();
             })
@@ -36,11 +43,17 @@ where
         self.events_handle.set(Some(events_handle));
     }
 
-    pub fn deactivate(&self) {
+    pub(crate) fn deactivate(&self) {
         self.inner.deactivate();
     }
 
-    pub fn push_event(&self, event: event::Event<F>) {}
+    pub(crate) fn push_event(&self, event: event::Event<F>) -> Arc<EventHandler<F::Output>> {
+        self.inner.push_event(event)
+    }
+
+    pub(crate) fn resume_event(&self, task_id: waker::TWakerID) {
+        self.inner.resume_event(task_id);
+    }
 }
 
 impl<F: Future + Send + 'static> Drop for Scheduler<F> {
@@ -57,6 +70,8 @@ where
     F: Future + Send + 'static,
 {
     in_progress: Arc<(Mutex<VecDeque<event::Event<F>>>, Condvar)>,
+    suspend_events: Mutex<HashMap<waker::TWakerID, event::Event<F>>>,
+    handlers: Mutex<HashMap<waker::TWakerID, Arc<EventHandler<F::Output>>>>,
     shutdown: Mutex<bool>,
 }
 
@@ -69,6 +84,8 @@ where
     fn new() -> Arc<Self> {
         Arc::new(Self {
             in_progress: Arc::new((Mutex::new(VecDeque::new()), Condvar::new())),
+            suspend_events: Mutex::new(HashMap::new()),
+            handlers: Mutex::new(HashMap::new()),
             shutdown: Mutex::new(false),
         })
     }
@@ -98,21 +115,63 @@ where
             drop(guard);
 
             match event {
-                Some(mut event) => {
-                    event.run();
-                }
+                Some(mut event) => match event.run() {
+                    event::EventStatus::READY(output) => {
+
+                        event.send_to_tx(output);
+                        log::debug!("Data was sent to event.");
+                        return;
+                    }
+                    event::EventStatus::SUSPEND => {
+                        log::debug!("Event wasn't finished, suspend.");
+                        let mut guard = self.suspend_events.lock().unwrap();
+                        guard.insert(event.get_task_id(), event);
+                    }
+                },
                 None => {
-                    log::error!("None in queue")
+                    panic!("event is None in queue")
                 }
             }
         }
     }
 
-    pub fn push_event(&self, event: event::Event<F>) {
+    fn push_event(&self, mut event: event::Event<F>) -> Arc<EventHandler<F::Output>> {
         if self.is_shutdown() {
-            log::debug!("failed, thread was shutdowned");
-            return;
+            panic!("failed, thread was shutdowned");
         }
+
+        let (tx, rx) = channel();
+
+        event.set_tx(tx);
+
+        let task_id = event.get_task_id();
+        {
+            let mut guard = self.suspend_events.lock().unwrap();
+            guard.insert(task_id, event);
+
+            log::debug!("event was added to suspended");
+        }
+
+        let event_handler = {
+            let mut handlers_guard = self.handlers.lock().unwrap();
+            let event_handler: Arc<EventHandler<F::Output>> = EventHandler::<F::Output>::new(rx);
+            handlers_guard.insert(task_id, event_handler.clone());
+            event_handler
+        };
+
+        self.resume_event(task_id);
+
+        log::debug!("event {} was added to suspend_events", task_id);
+
+        event_handler
+    }
+
+    fn resume_event(&self, task_id: waker::TWakerID) {
+        let event = {
+            let mut guard = self.suspend_events.lock().unwrap();
+            guard.remove(&task_id).unwrap()
+        };
+        log::debug!("event {} was removed from suspended", event.get_task_id());
 
         let (q, cvar) = &*self.in_progress;
         let mut guard = q.lock().unwrap();

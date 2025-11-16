@@ -70,6 +70,8 @@ impl Future for Task {
         log::debug!("Task has result buf: {:?}", result);
 
         log::debug!("Task was finished");
+
+        // @todo remove from reactor
         std::task::Poll::Ready(())
     }
 }
