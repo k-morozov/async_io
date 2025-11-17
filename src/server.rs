@@ -42,9 +42,9 @@ pub fn handle_connection(sfd: i32) -> i32 {
     };
     let mut slen = 0;
 
-    println!("prepare to call accept, sfd={sfd}");
+    log::info!("prepare to call accept, sfd={sfd}");
     let cfd = unsafe { libc::accept(sfd, &mut peer_addr, &mut slen) };
-    println!("accept was called, cfd={cfd}");
+    log::info!("accept was called, cfd={cfd}");
 
     unsafe {
         let flags = libc::fcntl(cfd, libc::F_GETFL, 0);

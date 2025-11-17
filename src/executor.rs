@@ -6,7 +6,8 @@ mod waker;
 use std::cell::Cell;
 use std::future::Future;
 use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::thread::JoinHandle;
 
 use crate::reactor::Reactor;
@@ -18,7 +19,7 @@ pub struct Executor<T: Send + 'static> {
     reactor: Arc<Reactor>,
     reactor_handle: Cell<Option<JoinHandle<()>>>,
 
-    id: Mutex<waker::TWakerID>,
+    id: AtomicU64,
 
     scheduler: Arc<Scheduler<T>>,
 }
@@ -38,7 +39,7 @@ impl<T: Send + 'static> Executor<T> {
         Self {
             reactor,
             reactor_handle: Cell::new(Some(reactor_handle)),
-            id: Mutex::new(1),
+            id: AtomicU64::new(1),
             scheduler: Arc::new(Scheduler::new()),
         }
     }
@@ -64,9 +65,9 @@ impl<T: Send + 'static> Executor<T> {
         let task_id = self.generate_id();
 
         let scheduler = self.scheduler.clone();
-        let resume = move |id: waker::TWakerID| {
-            log::debug!("call resume for waker with id={id}");
-            scheduler.resume_event(id);
+        let resume = move |task_id: waker::TWakerID| {
+            log::debug!("call resume for waker with task_id={task_id}");
+            scheduler.resume_event(task_id);
         };
 
         let waker = waker::make(task_id, Box::new(resume));
@@ -76,26 +77,9 @@ impl<T: Send + 'static> Executor<T> {
         handler
     }
 
-    // pub fn spawn_inner(&mut self, future: F) -> Arc<EventHandler<F::Output>> {
-    //     let task_id = self.generate_id();
-
-    //     let scheduler = self.scheduler.clone();
-    //     let resume = move |id: waker::TWakerID| {
-    //         log::debug!("call resume for waker with id={id}");
-    //         scheduler.resume_event(id);
-    //     };
-
-    //     let waker = waker::make(task_id, Box::new(resume));
-    //     let ev = event::Event::new(task_id, future, waker);
-
-    //     let handler = self.scheduler.push_event(ev);
-    //     handler
-    // }
-
     // trait?
     fn generate_id(&self) -> waker::TWakerID {
-        let g = self.id.lock().unwrap();
-        (*g).wrapping_add(1)
+        self.id.fetch_add(1, Ordering::Relaxed)
     }
 }
 

@@ -24,6 +24,10 @@ impl Reactor {
         self.fds.lock().unwrap().insert(fd, waker.clone());
     }
 
+    pub fn remove_reader(&self, fd: i32) {
+        let _ = self.fds.lock().unwrap().remove(&fd);
+    }
+
     pub fn set_shutdown(&self) {
         self.shutdown.store(true, Ordering::Relaxed);
     }
@@ -44,7 +48,7 @@ impl Reactor {
     }
 
     fn poll_once(&self) {
-        log::debug!("Next pool_once");
+        log::trace!("Next pool_once.");
         if self.is_shutdown() {
             log::debug!("Reactor was shutdowned.");
             return;
@@ -81,21 +85,40 @@ impl Reactor {
             )
         } {
             -1 => {
-                log::error!("Syscall select finished with -1");
+                let err = std::io::Error::last_os_error();
+
+                if err.raw_os_error() == Some(libc::EBADF) {
+                    log::error!("Syscall select finished with -1, found broken fd.");
+                }
+
+                if err.raw_os_error() == Some(libc::EINTR) {
+                    log::error!("Syscall select finished with -1, unexpected signal.");
+                }
             }
             0 => {
-                log::warn!("Syscall select finished with timeout");
+                log::trace!("Syscall select finished with timeout.");
             }
             count => {
-                log::info!("Syscall select finished with result {count}");
-                for (fd, waker) in self.fds.lock().unwrap().iter() {
-                    if unsafe { libc::FD_ISSET(*fd, &readfds) } {
-                        log::debug!("call wake for fd={}", *fd);
-                        waker.clone().wake();
-                        // @todo
-                        // self.fds.remove(fd);
-                    }
-                }
+                log::info!("Syscall select finished with {count} ready descriptors.");
+
+                let guard = self.fds.lock().unwrap();
+                guard
+                    .iter()
+                    .filter(|&(&fd, _)| unsafe { libc::FD_ISSET(fd, &readfds) })
+                    .for_each(|(&fd, w)| {
+                        log::debug!("descriptor {} is ready for read, call his waker.", fd);
+                        w.clone().wake();
+                    });
+
+                // guard.retain(|&fd, w| {
+                //     if unsafe { libc::FD_ISSET(fd, &readfds) } {
+                //         log::debug!("descriptor {} is ready for read, call his waker.", fd);
+                //         w.clone().wake();
+                //         return true;
+                //     } else {
+                //         return false;
+                //     }
+                // });
             }
         }
     }

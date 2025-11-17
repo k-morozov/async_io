@@ -10,11 +10,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init()
         .unwrap();
 
-    log::debug!("Hello, world!");
+    log::info!("Hello, world!");
 
     let sfd = run_server(4243);
     let cfd1 = handle_connection(sfd);
-    // let cfd2 = handle_connection(sfd);
+    let cfd2 = handle_connection(sfd);
 
     let mut ex = Executor::new();
     let reactor = ex.reactor();
@@ -23,22 +23,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let r = reactor.clone();
     let h1 = ex.spawn(async move {
-        log::debug!("msg 1");
+        log::info!("msg 1");
         Task::new(r, cfd1).await;
     });
 
-    log::debug!("step");
+    log::info!("h1 was spawned");
 
-    // let r = reactor.clone();
-    // let h2 = ex.spawn(async move {
-    //     log::debug!("msg 2");
-    //     Task::new(r, cfd2).await;
-    // });
+    let r = reactor.clone();
+    let h2 = ex.spawn(async move {
+        log::info!("msg 2");
+        Task::new(r, cfd2).await;
+    });
 
+    log::info!("h2 was spawned");
+
+    log::info!("wait h1");
     h1.wait_result();
-    // h2.wait_result();
 
-    log::debug!("main is finishing");
+    log::info!("wait h2");
+    h2.wait_result();
+
+    log::info!("main is finishing");
 
     Ok(())
 }

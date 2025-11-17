@@ -100,9 +100,11 @@ impl<T> SchedulerImpl<T> {
     fn loop_proccess(&self) {
         loop {
             if self.is_shutdown() {
-                log::debug!("thread was shutdowned, finish.");
+                log::info!("thread was shutdowned, finish.");
                 break;
             }
+
+            log::trace!("try get next task.");
 
             let (lock, cvar) = &*self.in_progress;
             let guard = lock.lock().unwrap();
@@ -113,18 +115,22 @@ impl<T> SchedulerImpl<T> {
             drop(guard);
 
             match event {
-                Some(mut event) => match event.run() {
-                    event::EventStatus::READY(output) => {
-                        event.send_to_tx(output);
-                        log::debug!("Data was sent to event.");
-                        return;
+                Some(mut event) => {
+                    log::trace!("try run the {event}.");
+
+                    match event.run() {
+                        event::EventStatus::READY(output) => {
+                            event.send_to_tx(output);
+                            log::info!("{event} was read, data was sent to event.");
+                            return;
+                        }
+                        event::EventStatus::SUSPEND => {
+                            log::debug!("{event} wasn't finished, suspend.");
+                            let mut guard = self.suspend_events.lock().unwrap();
+                            guard.insert(event.get_task_id(), event);
+                        }
                     }
-                    event::EventStatus::SUSPEND => {
-                        log::debug!("Event wasn't finished, suspend.");
-                        let mut guard = self.suspend_events.lock().unwrap();
-                        guard.insert(event.get_task_id(), event);
-                    }
-                },
+                }
                 None => {
                     panic!("event is None in queue")
                 }
@@ -134,7 +140,7 @@ impl<T> SchedulerImpl<T> {
 
     fn push_event(&self, mut event: event::Event<T>) -> Arc<EventHandler<T>> {
         if self.is_shutdown() {
-            panic!("failed, thread was shutdowned");
+            panic!("failed, thread was shutdowned.");
         }
 
         let (tx, rx) = channel();
@@ -143,10 +149,10 @@ impl<T> SchedulerImpl<T> {
 
         let task_id = event.get_task_id();
         {
+            log::debug!("{event} is added to suspended.");
+
             let mut guard = self.suspend_events.lock().unwrap();
             guard.insert(task_id, event);
-
-            log::debug!("event was added to suspended");
         }
 
         let event_handler = {
@@ -158,7 +164,10 @@ impl<T> SchedulerImpl<T> {
 
         self.resume_event(task_id);
 
-        log::debug!("event {} was added to suspend_events", task_id);
+        log::debug!(
+            "event with task_id={} was added to suspend_events.",
+            task_id
+        );
 
         event_handler
     }
@@ -168,7 +177,7 @@ impl<T> SchedulerImpl<T> {
             let mut guard = self.suspend_events.lock().unwrap();
             guard.remove(&task_id).unwrap()
         };
-        log::debug!("event {} was removed from suspended", event.get_task_id());
+        log::debug!("{event} was removed from suspended and adding to in_progress.");
 
         let (q, cvar) = &*self.in_progress;
         let mut guard = q.lock().unwrap();

@@ -20,16 +20,14 @@ impl<T> EventHandler<T> {
                     log::debug!("Handler obtained the output");
                     return output;
                 }
-                Err(er) => {
-                    match er {
-                        std::sync::mpsc::TryRecvError::Empty => {
-                            // just wait
-                        }
-                        std::sync::mpsc::TryRecvError::Disconnected => {
-                            panic!("unexpected situation");
-                        }
+                Err(er) => match er {
+                    std::sync::mpsc::TryRecvError::Empty => {
+                        std::thread::yield_now();
                     }
-                }
+                    std::sync::mpsc::TryRecvError::Disconnected => {
+                        panic!("unexpected situation");
+                    }
+                },
             }
         }
     }

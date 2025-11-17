@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::mpsc::Sender;
@@ -62,13 +63,24 @@ impl<T> Event<T> {
 
         match self.future.as_mut().poll(&mut ctx) {
             Poll::Ready(output) => {
-                log::debug!("Event is ready, run is completed.");
+                log::debug!("{self} is ready, run is completed.");
                 return EventStatus::READY(output);
             }
             Poll::Pending => {
-                log::debug!("Event is pending, re-schedule the event.");
+                log::debug!("{self} is pending, re-schedule the event.");
                 return EventStatus::SUSPEND;
             }
         }
+    }
+}
+
+impl<T> Display for Event<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Event(task_id={}, tx={})",
+            self.task_id,
+            self.tx.is_some()
+        )
     }
 }
