@@ -1,7 +1,8 @@
-use async_io::executor::Executor;
+use async_io::coro_step::CoroStep;
+use async_io::coro_step::read::CoroStepRead;
+use async_io::runtime::Runtime;
 use async_io::server::handle_connection;
 use async_io::server::run_server;
-use async_io::task::Task;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     simple_logger::SimpleLogger::new()
@@ -16,23 +17,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfd1 = handle_connection(sfd);
     let cfd2 = handle_connection(sfd);
 
-    let mut ex = Executor::new();
-    let reactor = ex.reactor();
+    let mut rt = Runtime::new();
+    let reactor = rt.reactor();
 
-    ex.start();
+    rt.start();
 
     let r = reactor.clone();
-    let h1 = ex.spawn(async move {
-        log::info!("msg 1");
-        Task::new(r, cfd1).await;
+    let h1 = rt.spawn(async move {
+        log::info!("coro: 1, step #1");
+
+        let result = CoroStepRead::execute(r, cfd1, 4).await;
+
+        let result = String::from_utf8_lossy(&result[..]).to_string();
+        log::debug!("step was finished, buf: {:?}.", result);
+
+        log::info!("coro: 1, step #2");
     });
 
     log::info!("h1 was spawned");
 
     let r = reactor.clone();
-    let h2 = ex.spawn(async move {
-        log::info!("msg 2");
-        Task::new(r, cfd2).await;
+    let h2 = rt.spawn(async move {
+        log::info!("coro: 2, step #1");
+
+        let result = CoroStepRead::execute(r, cfd2, 4).await;
+
+        let result = String::from_utf8_lossy(&result[..]).to_string();
+        log::debug!("step was finished, buf: {:?}.", result);
+
+        log::info!("coro: 2, step #2");
     });
 
     log::info!("h2 was spawned");

@@ -12,10 +12,11 @@ use std::thread::JoinHandle;
 
 use crate::reactor::Reactor;
 
+use self::event::TEventID;
 use self::event_handler::EventHandler;
 use self::scheduler::Scheduler;
 
-pub struct Executor<T: Send + 'static> {
+pub struct Runtime<T: Send + 'static> {
     reactor: Arc<Reactor>,
     reactor_handle: Cell<Option<JoinHandle<()>>>,
 
@@ -24,7 +25,7 @@ pub struct Executor<T: Send + 'static> {
     scheduler: Arc<Scheduler<T>>,
 }
 
-impl<T: Send + 'static> Executor<T> {
+impl<T: Send + 'static> Runtime<T> {
     pub fn new() -> Self {
         let reactor = Arc::new(Reactor::new());
         let reactor_to_handle = reactor.clone();
@@ -62,28 +63,28 @@ impl<T: Send + 'static> Executor<T> {
         &mut self,
         future: F,
     ) -> Arc<EventHandler<T>> {
-        let task_id = self.generate_id();
+        let event_id = self.generate_id();
 
         let scheduler = self.scheduler.clone();
-        let resume = move |task_id: waker::TWakerID| {
-            log::debug!("call resume for waker with task_id={task_id}");
-            scheduler.resume_event(task_id);
+        let resume = move |event_id: TEventID| {
+            log::debug!("call resume for waker with event_id={event_id}.");
+            scheduler.resume_event(event_id);
         };
 
-        let waker = waker::make(task_id, Box::new(resume));
-        let ev = event::Event::new(task_id, future, waker);
+        let waker = waker::make(event_id, Box::new(resume));
+        let ev = event::Event::new(event_id, future, waker);
 
         let handler = self.scheduler.push_event(ev);
         handler
     }
 
     // trait?
-    fn generate_id(&self) -> waker::TWakerID {
+    fn generate_id(&self) -> TEventID {
         self.id.fetch_add(1, Ordering::Relaxed)
     }
 }
 
-impl<T: Send + 'static> Drop for Executor<T> {
+impl<T: Send + 'static> Drop for Runtime<T> {
     fn drop(&mut self) {
         log::debug!("call drop");
 

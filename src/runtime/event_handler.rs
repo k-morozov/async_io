@@ -1,13 +1,17 @@
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 
+use super::event::TEventID;
+
 pub struct EventHandler<T> {
+    event_id: TEventID,
     result: Box<Mutex<Receiver<T>>>,
 }
 
 impl<T> EventHandler<T> {
-    pub fn new(rx: Receiver<T>) -> Arc<EventHandler<T>> {
+    pub fn new(event_id: TEventID, rx: Receiver<T>) -> Arc<EventHandler<T>> {
         Arc::new(Self {
+            event_id,
             result: Box::new(Mutex::new(rx)),
         })
     }
@@ -17,7 +21,10 @@ impl<T> EventHandler<T> {
             let guard = self.result.lock().unwrap();
             match guard.try_recv() {
                 Ok(output) => {
-                    log::debug!("Handler obtained the output");
+                    log::debug!(
+                        "Handler obtained the output for event_id={}.",
+                        self.event_id
+                    );
                     return output;
                 }
                 Err(er) => match er {
@@ -30,5 +37,11 @@ impl<T> EventHandler<T> {
                 },
             }
         }
+    }
+}
+
+impl<T> Drop for EventHandler<T> {
+    fn drop(&mut self) {
+        log::debug!("drop handler for event_id={}", self.event_id);
     }
 }

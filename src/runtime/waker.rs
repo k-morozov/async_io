@@ -4,16 +4,16 @@ use std::task::RawWaker;
 use std::task::RawWakerVTable;
 use std::task::Waker;
 
-pub(crate) type TWakerID = u64;
+use super::event::TEventID;
 
 pub struct WakerImpl {
-    task_id: TWakerID,
-    resume: Box<dyn Fn(TWakerID)>,
+    event_id: TEventID,
+    resume: Box<dyn Fn(TEventID)>,
 }
 
 impl WakerImpl {
-    pub fn new(task_id: TWakerID, resume: Box<dyn Fn(TWakerID)>) -> Self {
-        Self { task_id, resume }
+    pub fn new(event_id: TEventID, resume: Box<dyn Fn(TEventID)>) -> Self {
+        Self { event_id, resume }
     }
 }
 
@@ -28,15 +28,15 @@ static VTABLE: RawWakerVTable = RawWakerVTable::new(
     |ptr: *const ()| {
         let c = unsafe { Arc::from_raw(ptr as *const WakerImpl) };
 
-        log::debug!("{c} resume event");
-        (c.resume)(c.task_id);
+        log::debug!("{c} resume event.");
+        (c.resume)(c.event_id);
     },
     |_| {},
     |_| {},
 );
 
-pub fn make(task_id: TWakerID, resume: Box<dyn Fn(TWakerID)>) -> Waker {
-    let waker = Arc::new(WakerImpl::new(task_id, resume));
+pub fn make(event_id: TEventID, resume: Box<dyn Fn(TEventID)>) -> Waker {
+    let waker = Arc::new(WakerImpl::new(event_id, resume));
 
     let raw_waker = RawWaker::new(Arc::into_raw(waker) as *const (), &VTABLE);
     unsafe { Waker::from_raw(raw_waker) }
@@ -44,6 +44,6 @@ pub fn make(task_id: TWakerID, resume: Box<dyn Fn(TWakerID)>) -> Waker {
 
 impl Display for WakerImpl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "WakerImpl(task_id={})", self.task_id)
+        write!(f, "WakerImpl(event_id={}).", self.event_id)
     }
 }

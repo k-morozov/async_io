@@ -4,10 +4,10 @@ use std::sync::mpsc::channel;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 
-use crate::executor::event;
+use crate::runtime::event;
 
+use super::event::TEventID;
 use super::event_handler::EventHandler;
-use super::waker;
 
 pub(crate) struct Scheduler<T: Send + 'static> {
     inner: Arc<SchedulerImpl<T>>,
@@ -42,8 +42,8 @@ impl<T: Send + 'static> Scheduler<T> {
         self.inner.push_event(event)
     }
 
-    pub(crate) fn resume_event(&self, task_id: waker::TWakerID) {
-        self.inner.resume_event(task_id);
+    pub(crate) fn resume_event(&self, event_id: TEventID) {
+        self.inner.resume_event(event_id);
     }
 }
 
@@ -69,8 +69,8 @@ impl<T: Send + 'static> Drop for Scheduler<T> {
 
 struct SchedulerImpl<T> {
     in_progress: Arc<(Mutex<VecDeque<event::Event<T>>>, Condvar)>,
-    suspend_events: Mutex<HashMap<waker::TWakerID, event::Event<T>>>,
-    handlers: Mutex<HashMap<waker::TWakerID, Arc<EventHandler<T>>>>,
+    suspend_events: Mutex<HashMap<TEventID, event::Event<T>>>,
+    handlers: Mutex<HashMap<TEventID, Arc<EventHandler<T>>>>,
     shutdown: Mutex<bool>,
 }
 
@@ -118,16 +118,18 @@ impl<T> SchedulerImpl<T> {
                 Some(mut event) => {
                     log::trace!("try run the {event}.");
 
-                    match event.run() {
+                    match event.proccess() {
                         event::EventStatus::READY(output) => {
                             event.send_to_tx(output);
                             log::info!("{event} was read, data was sent to event.");
-                            return;
+                            // return;
                         }
                         event::EventStatus::SUSPEND => {
                             log::debug!("{event} wasn't finished, suspend.");
-                            let mut guard = self.suspend_events.lock().unwrap();
-                            guard.insert(event.get_task_id(), event);
+                            let mut suspend_events = self.suspend_events.lock().unwrap();
+                            suspend_events.insert(event.get_event_id(), event);
+
+                            // update reactor
                         }
                     }
                 }
@@ -147,36 +149,46 @@ impl<T> SchedulerImpl<T> {
 
         event.set_tx(tx);
 
-        let task_id = event.get_task_id();
+        let event_id = event.get_event_id();
         {
             log::debug!("{event} is added to suspended.");
 
             let mut guard = self.suspend_events.lock().unwrap();
-            guard.insert(task_id, event);
+            guard.insert(event_id, event);
         }
 
         let event_handler = {
             let mut handlers_guard = self.handlers.lock().unwrap();
-            let event_handler = EventHandler::<T>::new(rx);
-            handlers_guard.insert(task_id, event_handler.clone());
+            let event_handler = EventHandler::<T>::new(event_id, rx);
+            handlers_guard.insert(event_id, event_handler.clone());
             event_handler
         };
 
-        self.resume_event(task_id);
+        self.resume_event(event_id);
 
         log::debug!(
-            "event with task_id={} was added to suspend_events.",
-            task_id
+            "event with event_id={} was added to suspend_events.",
+            event_id
         );
 
         event_handler
     }
 
-    fn resume_event(&self, task_id: waker::TWakerID) {
+    fn resume_event(&self, task_id: TEventID) {
         let event = {
             let mut guard = self.suspend_events.lock().unwrap();
-            guard.remove(&task_id).unwrap()
+            guard.remove(&task_id)
         };
+
+        if let None = event {
+            log::debug!(
+                "Event with task_id={task_id} not found in suspend_events. Probably the event is in in_progress."
+            );
+            return;
+        }
+
+        let event = event.expect("check early");
+
         log::debug!("{event} was removed from suspended and adding to in_progress.");
 
         let (q, cvar) = &*self.in_progress;
