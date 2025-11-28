@@ -8,6 +8,8 @@ pub struct EventHandler<T> {
     result: Box<Mutex<Receiver<T>>>,
 }
 
+unsafe impl<T> Sync for EventHandler<T> {}
+
 impl<T> EventHandler<T> {
     pub fn new(event_id: TEventID, rx: Receiver<T>) -> Arc<EventHandler<T>> {
         Arc::new(Self {

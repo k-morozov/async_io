@@ -13,8 +13,15 @@ pub enum EventStatus<T> {
     SUSPEND,
 }
 
+#[derive(Clone, Debug)]
+pub enum ReschedulerPolicy {
+    InProgress,
+    Suspend,
+}
+
 pub struct Event<T> {
     event_id: TEventID,
+    reschedule_policy: ReschedulerPolicy,
     future: Pin<Box<dyn Future<Output = T>>>,
     waker: Waker,
     tx: Option<Sender<T>>,
@@ -23,16 +30,22 @@ pub struct Event<T> {
 unsafe impl<T> Send for Event<T> {}
 
 impl<T> Event<T> {
-    pub fn new<F>(event_id: TEventID, future: F, waker: Waker) -> Self
+    pub fn new<F>(event_id: TEventID, future: F, waker: Waker, policy: ReschedulerPolicy) -> Self
     where
         F: Future<Output = T> + Send + 'static,
     {
         Self {
             event_id,
+            reschedule_policy: policy,
             future: Box::pin(future),
             waker,
             tx: None,
         }
+    }
+
+    // copy?
+    pub fn get_rescheduler_policy(&self) -> ReschedulerPolicy {
+        self.reschedule_policy.clone()
     }
 
     pub fn get_event_id(&self) -> TEventID {
@@ -59,6 +72,7 @@ impl<T> Event<T> {
     }
 
     pub fn proccess(&mut self) -> EventStatus<T> {
+        log::debug!("{self} call proccess");
         let mut ctx = Context::from_waker(&self.waker);
 
         match self.future.as_mut().poll(&mut ctx) {
@@ -78,9 +92,10 @@ impl<T> Display for Event<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Event(event_id={}, tx={})",
+            "Event(event_id={}, tx={}, policy={:?})",
             self.event_id,
-            self.tx.is_some()
+            self.tx.is_some(),
+            self.reschedule_policy
         )
     }
 }

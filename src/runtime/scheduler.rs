@@ -4,7 +4,7 @@ use std::sync::mpsc::channel;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 
-use crate::runtime::event;
+use crate::runtime::event::{self, ReschedulerPolicy};
 
 use super::event::TEventID;
 use super::event_handler::EventHandler;
@@ -13,6 +13,8 @@ pub(crate) struct Scheduler<T: Send + 'static> {
     inner: Arc<SchedulerImpl<T>>,
     events_handle: Cell<Option<JoinHandle<()>>>,
 }
+
+unsafe impl<T: Send + 'static> Sync for Scheduler<T> {}
 
 impl<T: Send + 'static> Scheduler<T> {
     pub(crate) fn new() -> Self {
@@ -104,7 +106,7 @@ impl<T> SchedulerImpl<T> {
                 break;
             }
 
-            log::trace!("try get next task.");
+            log::trace!("loop_proccess try get next task.");
 
             let (lock, cvar) = &*self.in_progress;
             let guard = lock.lock().unwrap();
@@ -120,15 +122,26 @@ impl<T> SchedulerImpl<T> {
 
                     match event.proccess() {
                         event::EventStatus::READY(output) => {
+                            log::info!("{event} is ready, data will sent to event.");
                             event.send_to_tx(output);
-                            log::info!("{event} was read, data was sent to event.");
                             // return;
                         }
                         event::EventStatus::SUSPEND => {
                             log::debug!("{event} wasn't finished, suspend.");
-                            let mut suspend_events = self.suspend_events.lock().unwrap();
-                            suspend_events.insert(event.get_event_id(), event);
+                            let policy = event.get_rescheduler_policy().clone();
+                            let event_id = event.get_event_id();
 
+                            {
+                                let mut suspend_events = self.suspend_events.lock().unwrap();
+                                suspend_events.insert(event_id, event);
+                            }
+
+                            match policy {
+                                ReschedulerPolicy::InProgress => {
+                                    self.resume_event(event_id);
+                                }
+                                ReschedulerPolicy::Suspend => {}
+                            }
                             // update reactor
                         }
                     }
@@ -165,11 +178,6 @@ impl<T> SchedulerImpl<T> {
         };
 
         self.resume_event(event_id);
-
-        log::debug!(
-            "event with event_id={} was added to suspend_events.",
-            event_id
-        );
 
         event_handler
     }
