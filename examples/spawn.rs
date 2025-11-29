@@ -1,60 +1,58 @@
-use async_io::coro_step::CoroStep;
-use async_io::coro_step::read::CoroStepRead;
+use std::sync::Arc;
+use std::time::Duration;
+
 use async_io::runtime::Runtime;
 use async_io::server::handle_connection;
 use async_io::server::run_server;
+use async_io::task;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     simple_logger::SimpleLogger::new()
         .env()
         .with_threads(true)
+        .with_level(log::LevelFilter::Debug)
         .init()
         .unwrap();
 
-    log::info!("Hello, world!");
-
     let sfd = run_server(4243);
-    let cfd1 = handle_connection(sfd);
-    let cfd2 = handle_connection(sfd);
 
-    let mut rt = Runtime::new();
+    let rt = Arc::new(Runtime::new());
     let reactor = rt.reactor();
 
     rt.start();
 
-    let r = reactor.clone();
-    let h1 = rt.spawn(async move {
-        log::info!("coro: 1, step #1");
+    let inner_r = reactor.clone();
+    let inner_rt = rt.clone();
 
-        let result = CoroStepRead::execute(r, cfd1, 4).await;
+    rt.block_on(async move {
+        let mut handlers = Vec::new();
+        loop {
+            let cfd: i32 = handle_connection(sfd);
+            if -1 == cfd {
+                log::debug!("call suspend.");
+                std::thread::sleep(Duration::from_secs(4));
+                let _res = task::suspend().await;
+                log::debug!("return to loop");
+                continue;
+            }
+            let inner_r = inner_r.clone();
 
-        let result = String::from_utf8_lossy(&result[..]).to_string();
-        log::debug!("step was finished, buf: {:?}.", result);
+            let h1 = inner_rt.spawn(async move {
+                let result = task::read(inner_r, cfd, 4).await;
+                let result = String::from_utf8_lossy(&result[..]).to_string();
+                log::debug!("step was finished, buf: {:?}.", result);
+                let code = unsafe { libc::close(cfd) };
+                log::debug!("close socket {cfd} wit code {code}");
+            });
 
-        log::info!("coro: 1, step #2");
+            handlers.push(h1);
+            task::suspend().await;
+        }
+
+        // handlers.iter().for_each(|h| {
+        //     h.wait_result();
+        // });
     });
-
-    log::info!("h1 was spawned");
-
-    let r = reactor.clone();
-    let h2 = rt.spawn(async move {
-        log::info!("coro: 2, step #1");
-
-        let result = CoroStepRead::execute(r, cfd2, 4).await;
-
-        let result = String::from_utf8_lossy(&result[..]).to_string();
-        log::debug!("step was finished, buf: {:?}.", result);
-
-        log::info!("coro: 2, step #2");
-    });
-
-    log::info!("h2 was spawned");
-
-    log::info!("wait h1");
-    h1.wait_result();
-
-    log::info!("wait h2");
-    h2.wait_result();
 
     log::info!("main is finishing");
 

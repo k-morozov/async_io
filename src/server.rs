@@ -1,17 +1,19 @@
 pub fn run_server(port: u16) -> i32 {
+    log::info!("Starting server: port={port}");
+
     let sfd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
     if sfd == -1 {
         // error
     }
-    //  unsafe {
-    //     let flags = libc::fcntl(sfd, libc::F_GETFL, 0);
-    //     let r = libc::fcntl(sfd, libc::F_SETFL, flags | libc::O_NONBLOCK);
-    //     dbg!(r);
-    // };
+
+    unsafe {
+        let flags = libc::fcntl(sfd, libc::F_GETFL, 0);
+        libc::fcntl(sfd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+    };
 
     let addr = libc::sockaddr_in {
         sin_family: libc::AF_INET as libc::sa_family_t,
-        sin_port: port.to_be(), // network byte order
+        sin_port: port.to_be(),
         sin_addr: libc::in_addr {
             s_addr: libc::INADDR_ANY.to_be(),
         },
@@ -35,16 +37,26 @@ pub fn run_server(port: u16) -> i32 {
     sfd
 }
 
-pub fn handle_connection(sfd: i32) -> i32 {
-    let mut peer_addr = libc::sockaddr {
-        sa_data: [0; 14],
-        sa_family: libc::AF_INET as u16,
-    };
-    let mut slen = 0;
+pub fn handle_connection(sockfd: i32) -> i32 {
+    let mut peer_addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+    let mut slen = std::mem::size_of::<libc::sockaddr_in>() as u32;
 
-    log::info!("prepare to call accept, sfd={sfd}");
-    let cfd = unsafe { libc::accept(sfd, &mut peer_addr, &mut slen) };
-    log::info!("accept was called, cfd={cfd}");
+    log::info!("Prepare to call accept, sockfd={sockfd}");
+    let cfd = unsafe {
+        libc::accept(
+            sockfd,
+            &mut peer_addr as *mut libc::sockaddr_in as *mut libc::sockaddr,
+            &mut slen,
+        )
+    };
+    if -1 == cfd {
+        return -1;
+    }
+
+    let ip_addr = std::net::Ipv4Addr::from(u32::from_be(peer_addr.sin_addr.s_addr));
+    let port = u16::from_be(peer_addr.sin_port);
+
+    log::info!("Client connected: cfd={cfd}, ip_addr={ip_addr}, port={port}");
 
     unsafe {
         let flags = libc::fcntl(cfd, libc::F_GETFL, 0);
