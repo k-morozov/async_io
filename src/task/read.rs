@@ -4,9 +4,7 @@ use std::sync::Arc;
 
 use crate::reactor::Reactor;
 
-use super::CoroStep;
-
-pub struct CoroStepRead {
+pub struct Read {
     cfd: i32,
     nbytes: usize,
     reactor: Arc<Reactor>,
@@ -14,8 +12,8 @@ pub struct CoroStepRead {
     registred: Cell<bool>,
 }
 
-impl CoroStep for CoroStepRead {
-    fn execute(reactor: Arc<Reactor>, cfd: i32, nbytes: usize) -> Self {
+impl Read {
+    pub fn new(reactor: Arc<Reactor>, cfd: i32, nbytes: usize) -> Self {
         Self {
             cfd,
             nbytes,
@@ -25,14 +23,14 @@ impl CoroStep for CoroStepRead {
     }
 }
 
-impl Drop for CoroStepRead {
+impl Drop for Read {
     fn drop(&mut self) {
         log::info!("Drop: remove cfd={} from reactor.", self.cfd);
         self.reactor.remove_reader(self.cfd);
     }
 }
 
-impl Future for CoroStepRead {
+impl Future for Read {
     type Output = Vec<u8>;
 
     fn poll(
@@ -67,11 +65,11 @@ impl Future for CoroStepRead {
     }
 }
 
-impl Display for CoroStepRead {
+impl Display for Read {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "CoroStepRead(cfd={}, registred={})",
+            "TaskRead(cfd={}, registred={})",
             self.cfd,
             self.registred.get()
         )

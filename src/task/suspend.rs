@@ -1,26 +1,19 @@
 use std::cell::Cell;
 use std::fmt::Display;
 
-pub struct CoroStepSuspend {
+pub struct Suspend {
     ready: Cell<bool>,
 }
 
-impl CoroStepSuspend {
-    pub fn execute() -> Self {
+impl Suspend {
+    pub fn new() -> Self {
         Self {
             ready: Cell::new(false),
         }
     }
 }
 
-impl Drop for CoroStepSuspend {
-    fn drop(&mut self) {
-        // log::info!("Drop: remove cfd={} from reactor.", self.cfd);
-        // self.reactor.remove_reader(self.cfd);
-    }
-}
-
-impl Future for CoroStepSuspend {
+impl Future for Suspend {
     type Output = ();
 
     fn poll(
@@ -38,8 +31,8 @@ impl Future for CoroStepSuspend {
     }
 }
 
-impl Display for CoroStepSuspend {
+impl Display for Suspend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CoroStepSuspend(ready={})", self.ready.get())
+        write!(f, "TaskSuspend(ready={})", self.ready.get())
     }
 }

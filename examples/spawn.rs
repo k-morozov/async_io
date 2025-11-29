@@ -1,12 +1,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_io::coro_step::CoroStep;
-use async_io::coro_step::read::CoroStepRead;
-use async_io::coro_step::suspend::CoroStepSuspend;
 use async_io::runtime::Runtime;
 use async_io::server::handle_connection;
 use async_io::server::run_server;
+use async_io::task;
+// use async_io::task::read::Read;
+// use async_io::task::suspend::Suspend;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     simple_logger::SimpleLogger::new()
@@ -33,14 +33,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if -1 == cfd {
                 log::debug!("call suspend.");
                 std::thread::sleep(Duration::from_secs(4));
-                let res = CoroStepSuspend::execute().await;
+                let res = task::suspend().await;
                 log::debug!("return to loop");
                 continue;
             }
             let inner_r = inner_r.clone();
 
             let h1 = inner_rt.spawn(async move {
-                let result = CoroStepRead::execute(inner_r, cfd, 4).await;
+                let result = task::read(inner_r, cfd, 4).await;
                 let result = String::from_utf8_lossy(&result[..]).to_string();
                 log::debug!("step was finished, buf: {:?}.", result);
                 let code = unsafe { libc::close(cfd) };
@@ -48,7 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
 
             handlers.push(h1);
-            CoroStepSuspend::execute().await;
+            task::suspend().await;
         }
 
         handlers.iter().for_each(|h| {
