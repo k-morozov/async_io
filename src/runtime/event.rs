@@ -14,14 +14,14 @@ pub enum EventStatus<T> {
 }
 
 #[derive(Clone, Debug)]
-pub enum ReschedulerPolicy {
-    InProgress,
-    Suspend,
+pub enum PlanningPolicy {
+    Internal,
+    External,
 }
 
 pub struct Event<T> {
     event_id: TEventID,
-    reschedule_policy: ReschedulerPolicy,
+    reschedule_policy: PlanningPolicy,
     future: Pin<Box<dyn Future<Output = T>>>,
     waker: Waker,
     tx: Option<Sender<T>>,
@@ -30,7 +30,7 @@ pub struct Event<T> {
 unsafe impl<T> Send for Event<T> {}
 
 impl<T> Event<T> {
-    pub fn new<F>(event_id: TEventID, future: F, waker: Waker, policy: ReschedulerPolicy) -> Self
+    pub fn new<F>(event_id: TEventID, future: F, waker: Waker, policy: PlanningPolicy) -> Self
     where
         F: Future<Output = T> + Send + 'static,
     {
@@ -44,7 +44,7 @@ impl<T> Event<T> {
     }
 
     // copy?
-    pub fn get_rescheduler_policy(&self) -> ReschedulerPolicy {
+    pub fn get_rescheduler_policy(&self) -> PlanningPolicy {
         self.reschedule_policy.clone()
     }
 

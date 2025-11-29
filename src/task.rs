@@ -16,6 +16,6 @@ pub fn read(
     Read::new(reactor, cfd, nbytes)
 }
 
-pub fn suspend() -> impl Future<Output=<Suspend as Future>::Output> {
+pub fn suspend() -> impl Future<Output = <Suspend as Future>::Output> {
     Suspend::new()
 }

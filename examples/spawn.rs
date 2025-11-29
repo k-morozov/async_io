@@ -5,8 +5,6 @@ use async_io::runtime::Runtime;
 use async_io::server::handle_connection;
 use async_io::server::run_server;
 use async_io::task;
-// use async_io::task::read::Read;
-// use async_io::task::suspend::Suspend;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     simple_logger::SimpleLogger::new()
@@ -33,7 +31,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if -1 == cfd {
                 log::debug!("call suspend.");
                 std::thread::sleep(Duration::from_secs(4));
-                let res = task::suspend().await;
+                let _res = task::suspend().await;
                 log::debug!("return to loop");
                 continue;
             }
@@ -51,9 +49,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             task::suspend().await;
         }
 
-        handlers.iter().for_each(|h| {
-            h.wait_result();
-        });
+        // handlers.iter().for_each(|h| {
+        //     h.wait_result();
+        // });
     });
 
     log::info!("main is finishing");

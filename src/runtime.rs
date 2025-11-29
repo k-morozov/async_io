@@ -3,17 +3,17 @@ mod event_handler;
 mod scheduler;
 mod waker;
 
-use std::cell::Cell;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::task::Waker;
 use std::thread::JoinHandle;
 
 use crate::reactor::Reactor;
 
-use self::event::TEventID;
+use self::event::{PlanningPolicy, TEventID};
 use self::event_handler::EventHandler;
 use self::scheduler::Scheduler;
 
@@ -59,18 +59,18 @@ impl<T: Send + 'static> Runtime<T> {
     pub fn block_on<F: Future<Output = T> + Send + 'static>(&self, future: F) -> F::Output {
         let event_id = self.generate_id();
 
-        let scheduler = self.scheduler.clone();
-        let resume = move |event_id: TEventID| {
-            log::debug!("call resume for waker with event_id={event_id}.");
-            scheduler.resume_event(event_id);
-        };
-
-        let waker = waker::make(event_id, Box::new(resume));
+        // let scheduler = self.scheduler.clone();
+        // let resume = move |event_id: TEventID| {
+        //     log::debug!("call resume for waker with event_id={event_id}.");
+        //     scheduler.resume_event(event_id);
+        // };
+        // let waker = waker::make(event_id, Box::new(resume));
+        
         let ev = event::Event::new(
             event_id,
             future,
-            waker,
-            event::ReschedulerPolicy::InProgress,
+            Waker::noop().clone(),
+            PlanningPolicy::Internal,
         );
 
         let handler = self.scheduler.push_event(ev);
@@ -89,7 +89,7 @@ impl<T: Send + 'static> Runtime<T> {
         };
 
         let waker = waker::make(event_id, Box::new(resume));
-        let ev = event::Event::new(event_id, future, waker, event::ReschedulerPolicy::Suspend);
+        let ev = event::Event::new(event_id, future, waker, PlanningPolicy::External);
 
         let handler = self.scheduler.push_event(ev);
         handler

@@ -4,7 +4,7 @@ use std::sync::mpsc::channel;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 
-use crate::runtime::event::{self, ReschedulerPolicy};
+use crate::runtime::event::{self, PlanningPolicy};
 
 use super::event::TEventID;
 use super::event_handler::EventHandler;
@@ -137,10 +137,10 @@ impl<T> SchedulerImpl<T> {
                             }
 
                             match policy {
-                                ReschedulerPolicy::InProgress => {
+                                PlanningPolicy::Internal => {
                                     self.resume_event(event_id);
                                 }
-                                ReschedulerPolicy::Suspend => {}
+                                PlanningPolicy::External => {}
                             }
                             // update reactor
                         }
@@ -203,5 +203,33 @@ impl<T> SchedulerImpl<T> {
         let mut guard = q.lock().unwrap();
         guard.push_back(event);
         cvar.notify_one();
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::runtime::event::Event;
+    use crate::runtime::event::PlanningPolicy;
+    use crate::runtime::scheduler::Scheduler;
+    use std::task::Waker;
+
+    #[test]
+    fn test_internal_event() {
+        let scheduler = Scheduler::new();
+        scheduler.activate();
+
+        let event = Event::new(
+            1,
+            async move { 43 },
+            Waker::noop().clone(),
+            PlanningPolicy::Internal,
+        );
+
+        let handler = scheduler.push_event(event);
+        let result = handler.wait_result();
+
+        assert_eq!(result, 43);
+
+        scheduler.deactivate();
     }
 }
